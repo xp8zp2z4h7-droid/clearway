@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+That's the bug — our code only reads the first 20 rows to detect the header, but then processes only those same 20 rows instead of the full file. We need to keep the full dataset separate from the preview.
+Go to pages/pricing.js in GitHub → pencil icon → select all → replace with this:
+javascriptimport { useState, useEffect } from "react";
 
 const KEYWORDS = ["code","catalog","description","desc","price","cost","item","sku","unit","qty","quantity","vendor","upc","part","number","material"];
 
@@ -25,7 +27,8 @@ function scoreRow(row) {
 
 export default function Pricing() {
   const [step, setStep] = useState("upload");
-  const [rawRows, setRawRows] = useState([]);
+  const [allRows, setAllRows] = useState([]);
+  const [previewRows, setPreviewRows] = useState([]);
   const [headerRowIndex, setHeaderRowIndex] = useState(0);
   const [columns, setColumns] = useState([]);
   const [mapping, setMapping] = useState({ code: "", description: "", price: "" });
@@ -47,8 +50,9 @@ export default function Pricing() {
     const workbook = window.XLSX.read(data);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const raw = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    setAllRows(raw);
     const preview = raw.slice(0, 20);
-    setRawRows(preview);
+    setPreviewRows(preview);
     const scores = preview.map((row, i) => ({ i, score: scoreRow(Object.fromEntries(row.map((c, j) => [j, c]))) }));
     const best = scores.reduce((a, b) => (b.score > a.score ? b : a), scores[0]);
     setHeaderRowIndex(best.i);
@@ -56,10 +60,10 @@ export default function Pricing() {
   }
 
   function confirmHeader() {
-    const headerRow = rawRows[headerRowIndex];
+    const headerRow = allRows[headerRowIndex];
     const cols = headerRow.map((c, i) => ({ label: String(c).trim() || `Column ${i + 1}`, index: i })).filter((c) => c.label !== "");
     setColumns(cols);
-    const autoCode = cols.find((c) => KEYWORDS.slice(0, 4).some((k) => c.label.toLowerCase().includes(k)))?.label || "";
+    const autoCode = cols.find((c) => ["catalog","code","sku","item","part"].some((k) => c.label.toLowerCase().includes(k)))?.label || "";
     const autoDesc = cols.find((c) => ["description","desc","name"].some((k) => c.label.toLowerCase().includes(k)))?.label || "";
     const autoPrice = cols.find((c) => ["price","cost","rate"].some((k) => c.label.toLowerCase().includes(k)))?.label || "";
     setMapping({ code: autoCode, description: autoDesc, price: autoPrice });
@@ -67,9 +71,12 @@ export default function Pricing() {
   }
 
   function processFile() {
-    const dataRows = rawRows.slice(headerRowIndex + 1);
-    const headerRow = rawRows[headerRowIndex];
-    const colIndex = (name) => headerRow.indexOf(name) !== -1 ? headerRow.indexOf(name) : columns.find((c) => c.label === name)?.index ?? -1;
+    const headerRow = allRows[headerRowIndex];
+    const dataRows = allRows.slice(headerRowIndex + 1);
+    const colIndex = (name) => {
+      const idx = headerRow.findIndex((h) => String(h).trim() === name);
+      return idx >= 0 ? idx : columns.find((c) => c.label === name)?.index ?? -1;
+    };
     const codeIdx = colIndex(mapping.code);
     const descIdx = colIndex(mapping.description);
     const priceIdx = colIndex(mapping.price);
@@ -108,7 +115,6 @@ export default function Pricing() {
         <p style={s.sub}>Upload a vendor pricing file to match against the BH item master.</p>
       </div>
 
-      {/* Step 1: Upload */}
       {step === "upload" && (
         <div style={{ ...s.card, border: "2px dashed #e5e7eb", textAlign: "center", padding: 48 }}>
           <p style={{ margin: "0 0 16px", color: "#6b7280" }}>Select a vendor pricing file (.xlsx or .xls)</p>
@@ -117,37 +123,33 @@ export default function Pricing() {
         </div>
       )}
 
-      {/* Step 2: Confirm header row */}
       {step === "confirm-header" && (
-        <div>
-          <div style={s.card}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Step 1 — Confirm the header row</h2>
-            <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 20px" }}>We detected the highlighted row as the column headers. Use the arrows to adjust if needed.</p>
-            <div style={{ overflowX: "auto", marginBottom: 16 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <tbody>
-                  {rawRows.map((row, i) => (
-                    <tr key={i} style={{ background: i === headerRowIndex ? "#fef9c3" : i % 2 === 0 ? "#fafafa" : "#fff", borderBottom: "1px solid #f3f4f6" }}>
-                      <td style={{ padding: "6px 10px", color: "#9ca3af", width: 32, fontSize: 11 }}>{i + 1}</td>
-                      {row.slice(0, 8).map((cell, j) => (
-                        <td key={j} style={{ padding: "6px 10px", color: i === headerRowIndex ? "#854d0e" : "#374151", fontWeight: i === headerRowIndex ? 600 : 400, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{String(cell)}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.max(0, headerRowIndex - 1))}>↑ Move up</button>
-              <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.min(rawRows.length - 1, headerRowIndex + 1))}>↓ Move down</button>
-              <span style={{ fontSize: 13, color: "#6b7280" }}>Header is on row {headerRowIndex + 1}</span>
-              <button style={{ ...s.btn, marginLeft: "auto" }} onClick={confirmHeader}>This is correct →</button>
-            </div>
+        <div style={s.card}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Step 1 — Confirm the header row</h2>
+          <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 20px" }}>The highlighted row will be used as column headers. Use the arrows to adjust if needed.</p>
+          <div style={{ overflowX: "auto", marginBottom: 16 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <tbody>
+                {previewRows.map((row, i) => (
+                  <tr key={i} style={{ background: i === headerRowIndex ? "#fef9c3" : i % 2 === 0 ? "#fafafa" : "#fff", borderBottom: "1px solid #f3f4f6" }}>
+                    <td style={{ padding: "6px 10px", color: "#9ca3af", width: 32, fontSize: 11 }}>{i + 1}</td>
+                    {row.slice(0, 8).map((cell, j) => (
+                      <td key={j} style={{ padding: "6px 10px", color: i === headerRowIndex ? "#854d0e" : "#374151", fontWeight: i === headerRowIndex ? 600 : 400, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{String(cell)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.max(0, headerRowIndex - 1))}>↑ Move up</button>
+            <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.min(previewRows.length - 1, headerRowIndex + 1))}>↓ Move down</button>
+            <span style={{ fontSize: 13, color: "#6b7280" }}>Header is on row {headerRowIndex + 1}</span>
+            <button style={{ ...s.btn, marginLeft: "auto" }} onClick={confirmHeader}>This is correct →</button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Map columns */}
       {step === "map-columns" && (
         <div style={s.card}>
           <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Step 2 — Map the columns</h2>
@@ -167,14 +169,13 @@ export default function Pricing() {
         </div>
       )}
 
-      {/* Step 4: Results */}
       {step === "results" && (
         <>
-          <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+          <div style={{ display: "flex", gap: 16, marginBottom: 24, alignItems: "center" }}>
             <StatCard label="Total rows" value={results.length} />
             <StatCard label="With catalog code" value={matched.length} color="#166534" bg="#dcfce7" />
             <StatCard label="Missing code" value={unmatched.length} color="#991b1b" bg="#fee2e2" />
-            <button style={{ ...s.btnSm, marginLeft: "auto", alignSelf: "center" }} onClick={() => setStep("upload")}>Upload another file</button>
+            <button style={{ ...s.btnSm, marginLeft: "auto" }} onClick={() => setStep("upload")}>Upload another file</button>
           </div>
 
           {matched.length > 0 && (
