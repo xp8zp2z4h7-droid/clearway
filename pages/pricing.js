@@ -77,4 +77,34 @@ function StatCard({ label, value, color = "#111", bg = "#f3f4f6" }) {
   return (
     <div style={{ background: bg, borderRadius: 10, padding: "16px 24px", minWidth: 120 }}>
       <div style={{ fontSize: 28, fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: 13, color: "#6b7280", m
+      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+function Table({ rows }) {
+  const th = { padding: "10px 16px", textAlign: "left", fontWeight: 600, color: "#374151" };
+  const td = { padding: "10px 16px", color: "#374151" };
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+            <th style={th}>Catalog code</th>
+            <th style={th}>Description</th>
+            <th style={th}>Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #f3f4f6" }}>
+              <td style={td}>{r.code}</td>
+              <td style={td}>{r.desc}</td>
+              <td style={td}>{r.price}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
