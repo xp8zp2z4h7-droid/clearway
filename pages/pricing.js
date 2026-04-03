@@ -171,4 +171,63 @@ export default function Pricing() {
       {step === "results" && (
         <>
           <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
-            <Stat
+            <StatCard label="Total rows" value={results.length} />
+            <StatCard label="With catalog code" value={matched.length} color="#166534" bg="#dcfce7" />
+            <StatCard label="Missing code" value={unmatched.length} color="#991b1b" bg="#fee2e2" />
+            <button style={{ ...s.btnSm, marginLeft: "auto", alignSelf: "center" }} onClick={() => setStep("upload")}>Upload another file</button>
+          </div>
+
+          {matched.length > 0 && (
+            <div style={{ marginBottom: 32 }}>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Items found <span style={s.tag(true)}>{matched.length}</span></h2>
+              <ResultTable rows={matched} />
+            </div>
+          )}
+          {unmatched.length > 0 && (
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: "#991b1b" }}>Missing catalog code — needs review <span style={s.tag(false)}>{unmatched.length}</span></h2>
+              <ResultTable rows={unmatched} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, color = "#111", bg = "#f3f4f6" }) {
+  return (
+    <div style={{ background: bg, borderRadius: 10, padding: "16px 24px", minWidth: 120 }}>
+      <div style={{ fontSize: 28, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+function ResultTable({ rows }) {
+  const th = { padding: "10px 16px", textAlign: "left", fontWeight: 600, color: "#374151", fontSize: 13 };
+  const td = { padding: "10px 16px", color: "#374151", fontSize: 13 };
+  return (
+    <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+            <th style={th}>Catalog code</th>
+            <th style={th}>Description</th>
+            <th style={th}>Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 200).map((r, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #f9fafb" }}>
+              <td style={td}>{r.code}</td>
+              <td style={td}>{r.description}</td>
+              <td style={td}>{r.price !== "" ? `$${Number(r.price).toFixed(2)}` : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > 200 && <p style={{ fontSize: 12, color: "#9ca3af", padding: "8px 16px" }}>Showing first 200 of {rows.length} rows</p>}
+    </div>
+  );
+}
