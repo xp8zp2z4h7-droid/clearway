@@ -1,6 +1,4 @@
-That's the bug — our code only reads the first 20 rows to detect the header, but then processes only those same 20 rows instead of the full file. We need to keep the full dataset separate from the preview.
-Go to pages/pricing.js in GitHub → pencil icon → select all → replace with this:
-javascriptimport { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 
 const KEYWORDS = ["code","catalog","description","desc","price","cost","item","sku","unit","qty","quantity","vendor","upc","part","number","material"];
 
