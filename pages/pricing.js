@@ -1,21 +1,28 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import Head from "next/head";
 
 export default function Pricing() {
   const [rows, setRows] = useState([]);
-  const [fileName, setFileName] = useState("");
   const [status, setStatus] = useState("idle");
+  const [xlsxReady, setXlsxReady] = useState(false);
+
+  useEffect(() => {
+    if (window.XLSX) { setXlsxReady(true); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    script.onload = () => setXlsxReady(true);
+    document.head.appendChild(script);
+  }, []);
 
   async function handleFile(e) {
     const file = e.target.files[0];
-    if (!file) return;
-    setFileName(file.name);
+    if (!file || !xlsxReady) return;
     setStatus("processing");
 
-    const XLSX = await import("xlsx");
     const data = await file.arrayBuffer();
-    const workbook = XLSX.read(data);
+    const workbook = window.XLSX.read(data);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const parsed = XLSX.utils.sheet_to_json(sheet);
+    const parsed = window.XLSX.utils.sheet_to_json(sheet);
 
     const result = parsed.map((row) => {
       const code = row["Catalog Code"] || row["catalog_code"] || row["Item"] || row["SKU"] || "";
@@ -41,7 +48,8 @@ export default function Pricing() {
 
       <div style={{ border: "2px dashed #e5e7eb", borderRadius: 12, padding: 40, textAlign: "center", marginBottom: 32, background: "#fafafa" }}>
         <p style={{ margin: "0 0 16px", color: "#6b7280" }}>Select an Elliott Electric pricing file (.xlsx)</p>
-        <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ fontSize: 14 }} />
+        <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ fontSize: 14 }} disabled={!xlsxReady} />
+        {!xlsxReady && <p style={{ fontSize: 12, color: "#9ca3af", marginTop: 8 }}>Loading file reader...</p>}
       </div>
 
       {status === "processing" && <p style={{ color: "#6b7280" }}>Processing file...</p>}
@@ -56,7 +64,7 @@ export default function Pricing() {
 
           {matched.length > 0 && (
             <div style={{ marginBottom: 32 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Matched items</h2>
+              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Items found</h2>
               <Table rows={matched} />
             </div>
           )}
