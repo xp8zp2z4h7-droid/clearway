@@ -5,32 +5,36 @@ const KEYWORDS = ["code","catalog","description","desc","price","cost","item","s
 function scoreRow(row) {
   const cells = Object.values(row);
   if (cells.length === 0) return 0;
-  let score = 0;
-  let textCells = 0;
-  let emptyCells = 0;
+  let score = 0; let textCells = 0; let emptyCells = 0;
   cells.forEach((cell) => {
     if (cell === null || cell === undefined || cell === "") { emptyCells++; return; }
     if (typeof cell === "string" && cell.trim() !== "") {
       textCells++;
-      const lower = cell.toLowerCase().trim();
-      if (KEYWORDS.some((k) => lower.includes(k))) score += 3;
+      if (KEYWORDS.some((k) => cell.toLowerCase().trim().includes(k))) score += 3;
     }
   });
-  const fillRate = (cells.length - emptyCells) / cells.length;
-  const textRate = textCells / cells.length;
-  score += textRate * 5;
-  score += fillRate * 2;
+  score += (textCells / cells.length) * 5;
+  score += ((cells.length - emptyCells) / cells.length) * 2;
   return score;
 }
 
+function extractCatalogCode(description) {
+  if (!description) return "";
+  const str = String(description).trim();
+  const colonIdx = str.indexOf(":");
+  if (colonIdx > 0) return str.substring(0, colonIdx).trim();
+  return "";
+}
+
 export default function Pricing() {
-  const [step, setStep] = useState("upload");
+  const [step, setStep] = useState("upload-vendor");
   const [allRows, setAllRows] = useState([]);
   const [previewRows, setPreviewRows] = useState([]);
   const [headerRowIndex, setHeaderRowIndex] = useState(0);
   const [columns, setColumns] = useState([]);
   const [mapping, setMapping] = useState({ code: "", description: "", price: "" });
-  const [results, setResults] = useState([]);
+  const [vendorItems, setVendorItems] = useState([]);
+  const [matchResults, setMatchResults] = useState(null);
   const [xlsxReady, setXlsxReady] = useState(false);
 
   useEffect(() => {
@@ -41,7 +45,7 @@ export default function Pricing() {
     document.head.appendChild(script);
   }, []);
 
-  async function handleFile(e) {
+  async function handleVendorFile(e) {
     const file = e.target.files[0];
     if (!file || !xlsxReady) return;
     const data = await file.arrayBuffer();
@@ -68,7 +72,7 @@ export default function Pricing() {
     setStep("map-columns");
   }
 
-  function processFile() {
+  function processVendorFile() {
     const headerRow = allRows[headerRowIndex];
     const dataRows = allRows.slice(headerRowIndex + 1);
     const colIndex = (name) => {
@@ -78,19 +82,77 @@ export default function Pricing() {
     const codeIdx = colIndex(mapping.code);
     const descIdx = colIndex(mapping.description);
     const priceIdx = colIndex(mapping.price);
-    const processed = dataRows
+    const items = dataRows
       .filter((row) => row.some((c) => c !== ""))
       .map((row) => ({
         code: codeIdx >= 0 ? String(row[codeIdx] || "").trim() : "",
         description: descIdx >= 0 ? String(row[descIdx] || "").trim() : "",
         price: priceIdx >= 0 ? row[priceIdx] : "",
-      }));
-    setResults(processed);
+      }))
+      .filter((r) => r.code);
+    setVendorItems(items);
+    setStep("upload-master");
+  }
+
+  async function handleMasterFile(e) {
+    const file = e.target.files[0];
+    if (!file || !xlsxReady) return;
+    const data = await file.arrayBuffer();
+    const workbook = window.XLSX.read(data);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const raw = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+
+    // Find the header row (the one with Item# or similar)
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(raw.length, 15); i++) {
+      const row = raw[i];
+      if (row.some((c) => String(c).toLowerCase().includes("item") || String(c).toLowerCase().includes("description"))) {
+        headerIdx = i;
+        break;
+      }
+    }
+    const headerRow = raw[headerIdx];
+    const dataRows = raw.slice(headerIdx + 1);
+    const itemIdx = headerRow.findIndex((h) => String(h).toLowerCase().includes("item"));
+    const descIdx = headerRow.findIndex((h) => String(h).toLowerCase().includes("desc"));
+    const costIdx = headerRow.findIndex((h) => String(h).toLowerCase().includes("cost"));
+
+    // Build lookup map: catalog_code -> BH item
+    const bhMap = {};
+    dataRows.forEach((row) => {
+      const bhSku = itemIdx >= 0 ? String(row[itemIdx] || "").trim() : "";
+      const desc = descIdx >= 0 ? String(row[descIdx] || "").trim() : "";
+      const cost = costIdx >= 0 ? row[costIdx] : "";
+      const catalogCode = extractCatalogCode(desc);
+      if (catalogCode && bhSku) {
+        bhMap[catalogCode.toUpperCase()] = { bhSku, description: desc, currentCost: cost };
+      }
+    });
+
+    // Match vendor items against BH master
+    const matched = [];
+    const newItems = [];
+    vendorItems.forEach((item) => {
+      const bh = bhMap[item.code.toUpperCase()];
+      if (bh) {
+        const oldCost = parseFloat(bh.currentCost) || 0;
+        const newCost = parseFloat(item.price) || 0;
+        const delta = newCost - oldCost;
+        matched.push({ ...item, bhSku: bh.bhSku, bhDescription: bh.description, currentCost: bh.currentCost, delta, hasChange: Math.abs(delta) > 0.001 });
+      } else {
+        newItems.push(item);
+      }
+    });
+
+    const priceChanges = matched.filter((r) => r.hasChange);
+    const noChange = matched.filter((r) => !r.hasChange);
+
+    setMatchResults({ matched, priceChanges, noChange, newItems, bhMap });
     setStep("results");
   }
 
   const s = {
-    page: { fontFamily: "sans-serif", maxWidth: 1000, margin: "0 auto", padding: "40px 24px" },
+    page: { fontFamily: "sans-serif", maxWidth: 1100, margin: "0 auto", padding: "40px 24px" },
     back: { fontSize: 13, color: "#6b7280", textDecoration: "none" },
     h1: { fontSize: 24, fontWeight: 600, margin: "8px 0 4px" },
     sub: { color: "#6b7280", margin: "0 0 32px" },
@@ -99,32 +161,44 @@ export default function Pricing() {
     btnSm: { background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb", padding: "6px 14px", borderRadius: 6, fontSize: 13, cursor: "pointer" },
     select: { border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 14, width: "100%", background: "#fff" },
     label: { fontSize: 13, fontWeight: 500, color: "#374151", display: "block", marginBottom: 6 },
-    tag: (ok) => ({ display:"inline-block", fontSize:11, fontWeight:500, padding:"2px 8px", borderRadius:20, background: ok ? "#dcfce7" : "#fee2e2", color: ok ? "#166534" : "#991b1b" }),
   };
-
-  const matched = results.filter((r) => r.code);
-  const unmatched = results.filter((r) => !r.code);
 
   return (
     <div style={s.page}>
       <div style={{ marginBottom: 32 }}>
         <a href="/" style={s.back}>← Back to Clearway</a>
         <h1 style={s.h1}>Vendor Pricing</h1>
-        <p style={s.sub}>Upload a vendor pricing file to match against the BH item master.</p>
+        <p style={s.sub}>Upload a vendor pricing file and match it against the BH item master.</p>
       </div>
 
-      {step === "upload" && (
+      {/* Progress steps */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 32, fontSize: 13 }}>
+        {[["upload-vendor","confirm-header","map-columns","upload-master","results"].slice(0,3).includes(step) ? "active" : "done","Upload vendor file"],
+         [step === "upload-master" ? "active" : step === "results" ? "done" : "pending","Upload BH master"],
+         [step === "results" ? "active" : "pending","Review results"]
+        }.map(([status, label], i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, background: status === "active" ? "#111" : status === "done" ? "#dcfce7" : "#f3f4f6", color: status === "active" ? "#fff" : status === "done" ? "#166534" : "#9ca3af" }}>{status === "done" ? "✓" : i + 1}</div>
+            <span style={{ color: status === "active" ? "#111" : "#9ca3af", fontWeight: status === "active" ? 500 : 400 }}>{label}</span>
+            {i < 2 && <span style={{ color: "#e5e7eb", margin: "0 4px" }}>→</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* Step 1a: Upload vendor file */}
+      {step === "upload-vendor" && (
         <div style={{ ...s.card, border: "2px dashed #e5e7eb", textAlign: "center", padding: 48 }}>
-          <p style={{ margin: "0 0 16px", color: "#6b7280" }}>Select a vendor pricing file (.xlsx or .xls)</p>
-          <input type="file" accept=".xlsx,.xls" onChange={handleFile} style={{ fontSize: 14 }} disabled={!xlsxReady} />
-          {!xlsxReady && <p style={{ fontSize: 12, color: "#9ca3af", marginTop: 8 }}>Loading file reader...</p>}
+          <p style={{ margin: "0 0 8px", fontWeight: 500 }}>Step 1 — Upload vendor pricing file</p>
+          <p style={{ margin: "0 0 16px", color: "#6b7280", fontSize: 13 }}>Elliott Electric or any other vendor (.xlsx or .xls)</p>
+          <input type="file" accept=".xlsx,.xls" onChange={handleVendorFile} style={{ fontSize: 14 }} disabled={!xlsxReady} />
         </div>
       )}
 
+      {/* Step 1b: Confirm header */}
       {step === "confirm-header" && (
         <div style={s.card}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Step 1 — Confirm the header row</h2>
-          <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 20px" }}>The highlighted row will be used as column headers. Use the arrows to adjust if needed.</p>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Confirm the header row</h2>
+          <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 20px" }}>The highlighted row will be used as column headers. Adjust if needed.</p>
           <div style={{ overflowX: "auto", marginBottom: 16 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <tbody>
@@ -142,16 +216,17 @@ export default function Pricing() {
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.max(0, headerRowIndex - 1))}>↑ Move up</button>
             <button style={s.btnSm} onClick={() => setHeaderRowIndex(Math.min(previewRows.length - 1, headerRowIndex + 1))}>↓ Move down</button>
-            <span style={{ fontSize: 13, color: "#6b7280" }}>Header is on row {headerRowIndex + 1}</span>
-            <button style={{ ...s.btn, marginLeft: "auto" }} onClick={confirmHeader}>This is correct →</button>
+            <span style={{ fontSize: 13, color: "#6b7280" }}>Header is row {headerRowIndex + 1}</span>
+            <button style={{ ...s.btn, marginLeft: "auto" }} onClick={confirmHeader}>Confirm →</button>
           </div>
         </div>
       )}
 
+      {/* Step 1c: Map columns */}
       {step === "map-columns" && (
         <div style={s.card}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Step 2 — Map the columns</h2>
-          <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 24px" }}>Tell us which column contains each piece of information. We've made our best guess — adjust if needed.</p>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>Map the columns</h2>
+          <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 24px" }}>Which column contains each piece of information?</p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 20, marginBottom: 24 }}>
             {[["code","Catalog / item code"],["description","Description"],["price","Price / cost"]].map(([key, label]) => (
               <div key={key}>
@@ -163,70 +238,100 @@ export default function Pricing() {
               </div>
             ))}
           </div>
-          <button style={s.btn} onClick={processFile} disabled={!mapping.code}>Process file →</button>
+          <button style={s.btn} onClick={processVendorFile} disabled={!mapping.code}>Next: Upload BH master →</button>
         </div>
       )}
 
-      {step === "results" && (
+      {/* Step 2: Upload BH item master */}
+      {step === "upload-master" && (
+        <div style={{ ...s.card, border: "2px dashed #e5e7eb", textAlign: "center", padding: 48 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 500 }}>Step 2 — Upload BH item master</p>
+          <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 13 }}>Vendor file loaded: {vendorItems.length.toLocaleString()} items ready to match</p>
+          <p style={{ margin: "0 0 20px", color: "#6b7280", fontSize: 13 }}>Now upload the BH electrical item master list (.xlsx)</p>
+          <input type="file" accept=".xlsx,.xls" onChange={handleMasterFile} style={{ fontSize: 14 }} />
+        </div>
+      )}
+
+      {/* Step 3: Results */}
+      {step === "results" && matchResults && (
         <>
-          <div style={{ display: "flex", gap: 16, marginBottom: 24, alignItems: "center" }}>
-            <StatCard label="Total rows" value={results.length} />
-            <StatCard label="With catalog code" value={matched.length} color="#166534" bg="#dcfce7" />
-            <StatCard label="Missing code" value={unmatched.length} color="#991b1b" bg="#fee2e2" />
-            <button style={{ ...s.btnSm, marginLeft: "auto" }} onClick={() => setStep("upload")}>Upload another file</button>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+            <StatCard label="Vendor items" value={vendorItems.length.toLocaleString()} />
+            <StatCard label="Price changes" value={matchResults.priceChanges.length.toLocaleString()} color="#92400e" bg="#fef3c7" />
+            <StatCard label="No change" value={matchResults.noChange.length.toLocaleString()} color="#166534" bg="#dcfce7" />
+            <StatCard label="New — not in BH" value={matchResults.newItems.length.toLocaleString()} color="#991b1b" bg="#fee2e2" />
           </div>
 
-          {matched.length > 0 && (
-            <div style={{ marginBottom: 32 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Items found <span style={s.tag(true)}>{matched.length}</span></h2>
-              <ResultTable rows={matched} />
-            </div>
+          {matchResults.priceChanges.length > 0 && (
+            <Section title="Price changes" color="#92400e" bg="#fef3c7" items={matchResults.priceChanges} showDelta />
           )}
-          {unmatched.length > 0 && (
-            <div>
-              <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: "#991b1b" }}>Missing catalog code — needs review <span style={s.tag(false)}>{unmatched.length}</span></h2>
-              <ResultTable rows={unmatched} />
-            </div>
+          {matchResults.newItems.length > 0 && (
+            <Section title="New items — not in BH item master" color="#991b1b" bg="#fee2e2" items={matchResults.newItems} isNew />
           )}
+          {matchResults.noChange.length > 0 && (
+            <Section title="Matched — no price change" color="#166534" bg="#dcfce7" items={matchResults.noChange} />
+          )}
+
+          <button style={{ ...s.btnSm, marginTop: 24 }} onClick={() => { setStep("upload-vendor"); setMatchResults(null); setVendorItems([]); }}>Start over</button>
         </>
       )}
     </div>
   );
 }
 
-function StatCard({ label, value, color = "#111", bg = "#f3f4f6" }) {
+function Section({ title, color, bg, items, showDelta, isNew }) {
+  const [expanded, setExpanded] = useState(false);
+  const displayed = expanded ? items : items.slice(0, 5);
+  const th = { padding: "10px 14px", textAlign: "left", fontWeight: 600, color: "#374151", fontSize: 12 };
+  const td = { padding: "10px 14px", color: "#374151", fontSize: 12 };
   return (
-    <div style={{ background: bg, borderRadius: 10, padding: "16px 24px", minWidth: 120 }}>
-      <div style={{ fontSize: 28, fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 2 }}>{label}</div>
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{title}</h2>
+        <span style={{ fontSize: 11, fontWeight: 500, padding: "2px 8px", borderRadius: 20, background: bg, color }}>{items.length.toLocaleString()}</span>
+      </div>
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+              <th style={th}>Catalog code</th>
+              <th style={th}>Description</th>
+              {!isNew && <th style={th}>BH SKU</th>}
+              {!isNew && <th style={th}>Current cost</th>}
+              <th style={th}>Vendor price</th>
+              {showDelta && <th style={th}>Change</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {displayed.map((r, i) => (
+              <tr key={i} style={{ borderBottom: "1px solid #f9fafb", background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <td style={td}>{r.code}</td>
+                <td style={{ ...td, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description || r.bhDescription}</td>
+                {!isNew && <td style={td}>{r.bhSku}</td>}
+                {!isNew && <td style={td}>{r.currentCost !== "" && r.currentCost != null ? `$${Number(r.currentCost).toFixed(2)}` : "—"}</td>}
+                <td style={td}>{r.price !== "" ? `$${Number(r.price).toFixed(2)}` : "—"}</td>
+                {showDelta && <td style={{ ...td, color: r.delta > 0 ? "#991b1b" : "#166534", fontWeight: 600 }}>{r.delta > 0 ? "+" : ""}{r.delta.toFixed(2)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {items.length > 5 && (
+          <div style={{ padding: "10px 14px", borderTop: "1px solid #f3f4f6" }}>
+            <button style={{ fontSize: 13, color: "#6b7280", background: "none", border: "none", cursor: "pointer" }} onClick={() => setExpanded(!expanded)}>
+              {expanded ? "Show less ↑" : `Show all ${items.length.toLocaleString()} rows ↓`}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function ResultTable({ rows }) {
-  const th = { padding: "10px 16px", textAlign: "left", fontWeight: 600, color: "#374151", fontSize: 13 };
-  const td = { padding: "10px 16px", color: "#374151", fontSize: 13 };
+function StatCard({ label, value, color = "#111", bg = "#f3f4f6" }) {
   return (
-    <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
-            <th style={th}>Catalog code</th>
-            <th style={th}>Description</th>
-            <th style={th}>Price</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.slice(0, 200).map((r, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #f9fafb" }}>
-              <td style={td}>{r.code}</td>
-              <td style={td}>{r.description}</td>
-              <td style={td}>{r.price !== "" ? `$${Number(r.price).toFixed(2)}` : ""}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {rows.length > 200 && <p style={{ fontSize: 12, color: "#9ca3af", padding: "8px 16px" }}>Showing first 200 of {rows.length} rows</p>}
+    <div style={{ background: bg, borderRadius: 10, padding: "16px 20px" }}>
+      <div style={{ fontSize: 26, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{label}</div>
     </div>
   );
 }
